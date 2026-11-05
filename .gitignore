@@ -1,0 +1,5 @@
+.venv/
+auction.db
+photos/
+.env
+__pycache__/
