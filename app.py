@@ -4,8 +4,7 @@ from db import init_db, add_player, get_player, count_players, get_all_players
 from pdf_book import build_pdf
 
 init_db()
-st.set_page_config(page_title="Auction App", page_icon="🏏", layout="wide")
-
+st.set_page_config(page_title="Nextup", page_icon="🏏", layout="wide")
 ROLES = ["Batsman", "Bowler", "All-rounder", "Wicketkeeper", "Raider", "Defender"]
 
 if "drawn" not in st.session_state:
@@ -58,7 +57,7 @@ elif mode == "Auction":
 
     p = st.session_state.current
     if p is None:
-        st.markdown("<h1 style='text-align:center;margin-top:30vh'>Auction ready 🏏</h1>",
+        st.markdown("<h1 style='text-align:center;margin-top:30vh'>Nextup 🏏</h1>",
                     unsafe_allow_html=True)
     else:
         st.markdown(
