@@ -1,25 +1,36 @@
 import os
 import streamlit as st
-from db import init_db, add_player, get_player, count_players, get_all_players
+from db import (
+    init_db, create_tournament, get_tournament_by_code, list_tournaments,
+    set_registration_open, add_player, get_player, get_all_players, count_players,
+)
 from pdf_book import build_pdf
 
 init_db()
 st.set_page_config(page_title="Nextup", page_icon="🏏", layout="wide")
-ROLES = ["Batsman", "Bowler", "All-rounder", "Wicketkeeper", "Raider", "Defender"]
 
-if "drawn" not in st.session_state:
-    st.session_state.drawn = []      # numbers already shown
-if "current" not in st.session_state:
-    st.session_state.current = None  # player currently on screen
+ROLES_BY_SPORT = {
+    "Cricket": ["Batsman", "Bowler", "All-rounder", "Wicketkeeper"],
+    "Kabaddi": ["Raider", "Defender", "All-rounder"],
+}
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8501")
+ORGANIZER_PASSWORD = os.getenv("ORGANIZER_PASSWORD", "changeme")
 
-mode = st.sidebar.radio("Mode", ["Register", "Auction", "Organizer"])
 
-# ---------------- REGISTER ----------------
-if mode == "Register":
-    st.title("🏏 Player Registration")
+# ================= PLAYER VIEW (opened from the registration link) =================
+def registration_page(t):
+    if t is None:
+        st.error("This registration link is not valid.")
+        return
+    st.title(f"🏏 {t['name']}")
+    st.caption(f"{t['sport']} · {t['event_date']}")
+    if not t["registration_open"]:
+        st.warning("Registration for this tournament is closed.")
+        return
+
     with st.form("register", clear_on_submit=True):
         name = st.text_input("Full name")
-        role = st.selectbox("Role", ROLES)
+        role = st.selectbox("Role", ROLES_BY_SPORT[t["sport"]])
         age = st.number_input("Age", min_value=10, max_value=70, value=20)
         village = st.text_input("Village")
         photo = st.file_uploader("Your photo", type=["jpg", "jpeg", "png"])
@@ -29,39 +40,124 @@ if mode == "Register":
         if not name.strip() or not village.strip() or photo is None:
             st.error("Please fill every field and upload a photo.")
         else:
-            pid = add_player(name.strip(), role, int(age), village.strip(), photo.getvalue())
-            st.success(f"Registered! Your player number is {pid}.")
+            try:
+                number = add_player(
+                    t["id"], name.strip(), role, int(age), village.strip(), photo.getvalue()
+                )
+            except Exception as e:
+                st.error(f"Could not save your registration. Try a different photo. ({e})")
+            else:
+                st.success(f"Registered! Your player number is {number}. Remember it.")
 
 
-# ---------------- AUCTION ----------------
-elif mode == "Auction":
-    total = count_players()
-    st.sidebar.markdown(f"**Registered players:** {total}")
+# ================= ORGANIZER LOGIN =================
+def organizer_gate():
+    if st.session_state.get("is_organizer"):
+        return
+    st.title("📋 Nextup Organizer")
+    with st.form("login"):
+        pw = st.text_input("Organizer password", type="password")
+        ok = st.form_submit_button("Log in", type="primary")
+    if ok:
+        if pw == ORGANIZER_PASSWORD:
+            st.session_state.is_organizer = True
+            st.rerun()
+        else:
+            st.error("Wrong password.")
+    st.stop()
 
+
+# ================= ORGANIZER: MANAGE =================
+def create_form(has_tournaments):
+    with st.expander("➕ Create a new tournament", expanded=not has_tournaments):
+        with st.form("create"):
+            name = st.text_input("Tournament name")
+            sport = st.selectbox("Sport", list(ROLES_BY_SPORT))
+            event_date = st.date_input("Event date")
+            create = st.form_submit_button("Create tournament", type="primary")
+        if create:
+            if not name.strip():
+                st.error("Enter a tournament name.")
+            else:
+                code = create_tournament(name.strip(), sport, event_date.isoformat())
+                st.session_state.pending_select = code
+                st.rerun()
+
+
+def manage_page(t):
+    st.title(f"📋 {t['name']}")
+    st.caption(f"{t['sport']} · {t['event_date']}")
+
+    st.markdown("**Registration link (send this to players):**")
+    st.code(f"{BASE_URL}/?t={t['code']}", language=None)
+
+    is_open = st.toggle(
+        "Registration open",
+        value=bool(t["registration_open"]),
+        key=f"open_{t['code']}",
+    )
+    if is_open != bool(t["registration_open"]):
+        set_registration_open(t["id"], is_open)
+        st.rerun()
+
+    players = get_all_players(t["id"])
+    st.subheader(f"{len(players)} players registered")
+    if players:
+        st.dataframe(
+            [
+                {"No.": p["number"], "Name": p["name"], "Role": p["role"],
+                 "Age": p["age"], "Village": p["village"]}
+                for p in players
+            ],
+            hide_index=True,
+        )
+
+    pdf_key = f"pdf_{t['code']}"
+    if st.button("Prepare PDF", type="primary"):
+        with st.spinner("Building PDF..."):
+            st.session_state[pdf_key] = build_pdf(players, t["name"])
+    if st.session_state.get(pdf_key):
+        st.download_button(
+            "⬇️ Download PDF",
+            data=st.session_state[pdf_key],
+            file_name=f"{t['code']}_player_book.pdf",
+            mime="application/pdf",
+        )
+        st.caption("New registrations since you prepared this? Click Prepare PDF again.")
+
+
+# ================= ORGANIZER: AUCTION (projector) =================
+def auction_page(t):
+    drawn_key, current_key = f"drawn_{t['code']}", f"current_{t['code']}"
+    if drawn_key not in st.session_state:
+        st.session_state[drawn_key] = []
+    drawn = st.session_state[drawn_key]
+
+    st.sidebar.markdown(f"**Registered players:** {count_players(t['id'])}")
     with st.sidebar.form("draw"):
         number = st.number_input("Number from the chit", min_value=1, step=1, value=1)
         show = st.form_submit_button("Show player", type="primary")
 
     if show:
-        player = get_player(int(number))
+        player = get_player(t["id"], int(number))
         if player is None:
             st.sidebar.error(f"No player with number {int(number)}.")
         else:
-            if player["id"] in st.session_state.drawn:
+            if player["number"] in drawn:
                 st.sidebar.warning("This number was already shown.")
             else:
-                st.session_state.drawn.append(player["id"])
-            st.session_state.current = player
+                drawn.append(player["number"])
+            st.session_state[current_key] = player
 
-    st.sidebar.markdown("**Shown so far:** " + (", ".join(map(str, st.session_state.drawn)) or "none"))
+    st.sidebar.markdown("**Shown so far:** " + (", ".join(map(str, drawn)) or "none"))
 
-    p = st.session_state.current
+    p = st.session_state.get(current_key)
     if p is None:
         st.markdown("<h1 style='text-align:center;margin-top:30vh'>Nextup 🏏</h1>",
                     unsafe_allow_html=True)
     else:
         st.markdown(
-            f"<h1 style='text-align:center;font-size:90px;margin:0'>Player #{p['id']}</h1>",
+            f"<h1 style='text-align:center;font-size:90px;margin:0'>Player #{p['number']}</h1>",
             unsafe_allow_html=True,
         )
         left, right = st.columns([1, 1])
@@ -78,22 +174,39 @@ elif mode == "Auction":
                 unsafe_allow_html=True,
             )
 
-# ---------------- ORGANIZER ----------------
-else:
-    st.title("📋 Organizer")
-    password = st.text_input("Organizer password", type="password")
-    if password != os.getenv("ORGANIZER_PASSWORD", "changeme"):
-        st.info("Enter the organizer password to continue.")
+
+# ================= ROUTING =================
+code = st.query_params.get("t")
+if code:                                   # a player opened a registration link
+    registration_page(get_tournament_by_code(code))
+    st.stop()
+
+organizer_gate()                           # everyone else must log in
+
+tournaments = list_tournaments()
+names = {x["code"]: f"{x['name']} ({x['sport']})" for x in tournaments}
+
+# After creating a tournament, select it (must happen before the selectbox is drawn)
+if "pending_select" in st.session_state:
+    st.session_state.selected = st.session_state.pop("pending_select")
+
+st.sidebar.title("Nextup")
+selected_code = None
+if tournaments:
+    selected_code = st.sidebar.selectbox(
+        "Tournament", list(names), format_func=names.get, key="selected"
+    )
+page = st.sidebar.radio("Page", ["Manage", "Auction"])
+t = get_tournament_by_code(selected_code) if selected_code else None
+
+if page == "Manage":
+    create_form(has_tournaments=bool(tournaments))
+    if t:
+        manage_page(t)
     else:
-        players = get_all_players()
-        st.write(f"**{len(players)}** players registered.")
-        if st.button("Prepare PDF", type="primary"):
-            with st.spinner("Building PDF..."):
-                st.session_state.pdf = build_pdf(players, "Player Book")
-        if st.session_state.get("pdf"):
-            st.download_button(
-                "⬇️ Download PDF",
-                data=st.session_state.pdf,
-                file_name="player_book.pdf",
-                mime="application/pdf",
-            )
+        st.info("Create your first tournament above.")
+else:
+    if t:
+        auction_page(t)
+    else:
+        st.info("Create a tournament first (Manage page).")

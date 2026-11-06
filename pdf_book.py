@@ -38,8 +38,7 @@ def build_pdf(players, title="Player Book"):
         # player number under the photo
         pdf.set_font("Helvetica", "B", 16)
         pdf.set_xy(x + 3, y + 51)
-        pdf.cell(34, 8, f"#{p['id']}", align="C")
-
+        pdf.cell(34, 8, f"#{p['number']}", align="C")
         # details on the right
         tx, tw = x + 40, CARD_W - 43
         pdf.set_font("Helvetica", "B", 13)
