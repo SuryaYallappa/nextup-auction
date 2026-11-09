@@ -3,7 +3,8 @@ import streamlit as st
 from validators import clean_phone, check_age, check_registration_open, today_in_india
 from db import (
     init_db, create_tournament, get_tournament_by_code, list_tournaments,
-    set_registration_open, add_player, get_player, get_all_players, count_players,
+    list_public_tournaments, set_registration_open, add_player, get_player,
+    get_all_players, count_players,
 )
 from pdf_book import build_pdf
 
@@ -216,14 +217,45 @@ def auction_page(t):
                 unsafe_allow_html=True,
             )
 
+# ================= PUBLIC HOME BOARD =================
+def home_page():
+    st.title("🏏 Nextup")
+    st.subheader("Tournaments open for registration")
+
+    today = today_in_india()
+    open_ones = [
+        x for x in list_public_tournaments()
+        if check_registration_open(x["registration_open"], x["registration_deadline"], today) is None
+    ]
+    if not open_ones:
+        st.info("No tournaments are open for registration right now. Check back soon.")
+        return
+
+    for x in open_ones:
+        with st.container(border=True):
+            st.markdown(f"### {x['name']}")
+            st.write(f"{x['sport']} · {x['event_date']} · Ages {x['min_age']} to {x['max_age']}")
+            if x["registration_deadline"]:
+                st.caption(f"Register by {x['registration_deadline']}")
+            if st.button("Register", key=f"reg_{x['code']}", type="primary"):
+                st.query_params["t"] = x["code"]
+                st.rerun()
+
 
 # ================= ROUTING =================
 code = st.query_params.get("t")
 if code:                                   # a player opened a registration link
+    if st.button("← All tournaments"):
+        st.query_params.clear()
+        st.rerun()
     registration_page(get_tournament_by_code(code))
     st.stop()
 
-organizer_gate()                           # everyone else must log in
+if st.query_params.get("page") != "organizer":   # the public home board
+    home_page()
+    st.stop()
+
+organizer_gate()                           # only the organizer address needs the password                         # everyone else must log in
 
 tournaments = list_tournaments()
 names = {x["code"]: f"{x['name']} ({x['sport']})" for x in tournaments}

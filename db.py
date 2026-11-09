@@ -153,3 +153,10 @@ def count_players(tournament_id):
         return conn.execute(
             "SELECT COUNT(*) FROM players WHERE tournament_id = ?", (tournament_id,)
         ).fetchone()[0]
+
+def list_public_tournaments():
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tournaments WHERE is_public = 1 ORDER BY event_date"
+        ).fetchall()
+        return [dict(r) for r in rows]
