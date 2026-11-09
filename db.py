@@ -29,13 +29,17 @@ def db():
 def init_db():
     with db() as conn:
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS tournaments (
+                CREATE TABLE IF NOT EXISTS tournaments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 code TEXT UNIQUE NOT NULL,
                 name TEXT NOT NULL,
                 sport TEXT NOT NULL,
                 event_date TEXT,
-                registration_open INTEGER NOT NULL DEFAULT 1
+                registration_open INTEGER NOT NULL DEFAULT 1,
+                min_age INTEGER NOT NULL DEFAULT 10,
+                max_age INTEGER NOT NULL DEFAULT 70,
+                registration_deadline TEXT,
+                is_public INTEGER NOT NULL DEFAULT 0
             )
         """)
         conn.execute("""
@@ -47,22 +51,27 @@ def init_db():
                 role TEXT NOT NULL,
                 age INTEGER NOT NULL,
                 village TEXT NOT NULL,
+                phone TEXT NOT NULL,
                 photo_path TEXT,
+                flag_dismissed INTEGER NOT NULL DEFAULT 0,
                 UNIQUE (tournament_id, number)
             )
         """)
 
-
 # ---------------- tournaments ----------------
-def create_tournament(name, sport, event_date):
+def create_tournament(name, sport, event_date, min_age, max_age, deadline, is_public):
     alphabet = string.ascii_lowercase + string.digits
-    for _ in range(5):  # retry in the unlikely case of a duplicate code
+    for _ in range(5):
         code = "".join(secrets.choice(alphabet) for _ in range(6))
         try:
             with db() as conn:
                 conn.execute(
-                    "INSERT INTO tournaments (code, name, sport, event_date) VALUES (?, ?, ?, ?)",
-                    (code, name, sport, event_date),
+                    """INSERT INTO tournaments
+                       (code, name, sport, event_date, min_age, max_age,
+                        registration_deadline, is_public)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (code, name, sport, event_date, min_age, max_age,
+                     deadline, 1 if is_public else 0),
                 )
             return code
         except sqlite3.IntegrityError:
@@ -102,7 +111,7 @@ def save_photo(uploaded_bytes, tournament_id, number):
     return path
 
 
-def add_player(tournament_id, name, role, age, village, photo_bytes):
+def add_player(tournament_id, name, role, age, village, phone, photo_bytes):
     with db() as conn:
         # Lock the database for writing so two people registering at the
         # same moment can't both receive the same player number.
@@ -113,11 +122,12 @@ def add_player(tournament_id, name, role, age, village, photo_bytes):
         ).fetchone()[0]
         path = save_photo(photo_bytes, tournament_id, number)
         conn.execute(
-            """INSERT INTO players (tournament_id, number, name, role, age, village, photo_path)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (tournament_id, number, name, role, age, village, path),
+            """INSERT INTO players
+               (tournament_id, number, name, role, age, village, phone, photo_path)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (tournament_id, number, name, role, age, village, phone, path),
         )
-    return number
+        return number
 
 
 def get_player(tournament_id, number):

@@ -1,5 +1,6 @@
 import os
 import streamlit as st
+from validators import clean_phone, check_age, check_registration_open, today_in_india
 from db import (
     init_db, create_tournament, get_tournament_by_code, list_tournaments,
     set_registration_open, add_player, get_player, get_all_players, count_players,
@@ -23,31 +24,56 @@ def registration_page(t):
         st.error("This registration link is not valid.")
         return
     st.title(f"🏏 {t['name']}")
-    st.caption(f"{t['sport']} · {t['event_date']}")
-    if not t["registration_open"]:
-        st.warning("Registration for this tournament is closed.")
+    st.caption(f"{t['sport']} · {t['event_date']} · Ages {t['min_age']} to {t['max_age']}")
+
+    closed = check_registration_open(
+        t["registration_open"], t["registration_deadline"], today_in_india()
+    )
+    if closed:
+        st.warning(closed)
         return
 
-    with st.form("register", clear_on_submit=True):
+    # After a successful registration, show the number instead of the form
+    done_key = f"done_{t['code']}"
+    if st.session_state.get(done_key):
+        st.success(f"Registered! Your player number is {st.session_state[done_key]}. Remember it.")
+        if st.button("Register another player"):
+            del st.session_state[done_key]
+            st.rerun()
+        return
+
+    if t["registration_deadline"]:
+        st.info(f"Register by {t['registration_deadline']}.")
+
+    with st.form("register"):
         name = st.text_input("Full name")
         role = st.selectbox("Role", ROLES_BY_SPORT[t["sport"]])
-        age = st.number_input("Age", min_value=10, max_value=70, value=20)
+        age = st.number_input("Age", min_value=5, max_value=100, value=20)
         village = st.text_input("Village")
+        phone_raw = st.text_input("Phone number")
         photo = st.file_uploader("Your photo", type=["jpg", "jpeg", "png"])
         submitted = st.form_submit_button("Register", type="primary")
 
     if submitted:
+        phone = clean_phone(phone_raw)
+        age_error = check_age(int(age), t["min_age"], t["max_age"])
         if not name.strip() or not village.strip() or photo is None:
             st.error("Please fill every field and upload a photo.")
+        elif phone is None:
+            st.error("Enter a valid 10-digit mobile number.")
+        elif age_error:
+            st.error(age_error)
         else:
             try:
                 number = add_player(
-                    t["id"], name.strip(), role, int(age), village.strip(), photo.getvalue()
+                    t["id"], name.strip(), role, int(age),
+                    village.strip(), phone, photo.getvalue(),
                 )
             except Exception as e:
                 st.error(f"Could not save your registration. Try a different photo. ({e})")
             else:
-                st.success(f"Registered! Your player number is {number}. Remember it.")
+                st.session_state[done_key] = number
+                st.rerun()
 
 
 # ================= ORGANIZER LOGIN =================
@@ -74,19 +100,35 @@ def create_form(has_tournaments):
             name = st.text_input("Tournament name")
             sport = st.selectbox("Sport", list(ROLES_BY_SPORT))
             event_date = st.date_input("Event date")
+            col1, col2 = st.columns(2)
+            min_age = col1.number_input("Minimum age", min_value=5, max_value=80, value=16)
+            max_age = col2.number_input("Maximum age", min_value=5, max_value=80, value=35)
+            deadline = st.date_input("Registration deadline", value=today_in_india())
+            is_public = st.checkbox("Show on the public tournament board")
             create = st.form_submit_button("Create tournament", type="primary")
         if create:
             if not name.strip():
                 st.error("Enter a tournament name.")
+            elif min_age > max_age:
+                st.error("Minimum age cannot be higher than maximum age.")
+            elif deadline > event_date:
+                st.error("The deadline must be on or before the event date.")
             else:
-                code = create_tournament(name.strip(), sport, event_date.isoformat())
+                code = create_tournament(
+                    name.strip(), sport, event_date.isoformat(),
+                    int(min_age), int(max_age), deadline.isoformat(), is_public,
+                )
                 st.session_state.pending_select = code
                 st.rerun()
 
 
 def manage_page(t):
     st.title(f"📋 {t['name']}")
-    st.caption(f"{t['sport']} · {t['event_date']}")
+    st.caption(
+        f"{t['sport']} · {t['event_date']} · Ages {t['min_age']} to {t['max_age']} · "
+        f"Deadline {t['registration_deadline']} · "
+        + ("Public" if t["is_public"] else "Private")
+    )
 
     st.markdown("**Registration link (send this to players):**")
     st.code(f"{BASE_URL}/?t={t['code']}", language=None)
@@ -106,7 +148,7 @@ def manage_page(t):
         st.dataframe(
             [
                 {"No.": p["number"], "Name": p["name"], "Role": p["role"],
-                 "Age": p["age"], "Village": p["village"]}
+                 "Age": p["age"], "Village": p["village"], "Phone": p["phone"]}
                 for p in players
             ],
             hide_index=True,
