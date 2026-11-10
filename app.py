@@ -4,8 +4,10 @@ from validators import clean_phone, check_age, check_registration_open, today_in
 from db import (
     init_db, create_tournament, get_tournament_by_code, list_tournaments,
     list_public_tournaments, set_registration_open, add_player, get_player,
-    get_all_players, count_players,
+    get_all_players, count_players, dismiss_flags, update_player, remove_player,
+    restore_player, reset_flags, get_removed_players,
 )
+from duplicates import find_duplicate_groups
 from pdf_book import build_pdf
 
 init_db()
@@ -123,6 +125,36 @@ def create_form(has_tournaments):
                 st.rerun()
 
 
+def player_actions(p, roles, ctx, col_edit, col_remove):
+    """Edit and Remove buttons for one player. Remove is soft, so it can be undone."""
+    with col_edit.popover("✏️ Edit"):
+        with st.form(f"edit_{ctx}_{p['id']}"):
+            name = st.text_input("Name", value=p["name"])
+            role = st.selectbox(
+                "Role", roles,
+                index=roles.index(p["role"]) if p["role"] in roles else 0,
+            )
+            age = st.number_input("Age", min_value=5, max_value=100, value=int(p["age"]))
+            village = st.text_input("Village", value=p["village"])
+            phone_raw = st.text_input("Phone", value=p["phone"])
+            save = st.form_submit_button("Save changes", type="primary")
+        if save:
+            phone = clean_phone(phone_raw)
+            if not name.strip() or not village.strip():
+                st.error("Name and village cannot be empty.")
+            elif phone is None:
+                st.error("Enter a valid 10-digit mobile number.")
+            else:
+                update_player(p["id"], name.strip(), role, int(age), village.strip(), phone)
+                st.rerun()
+
+    with col_remove.popover("🗑 Remove"):
+        st.write(f"Remove #{p['number']} {p['name']}? You can restore them later.")
+        if st.button("Yes, remove", key=f"rm_{ctx}_{p['id']}", type="primary"):
+            remove_player(p["id"])
+            st.rerun()
+
+
 def manage_page(t):
     st.title(f"📋 {t['name']}")
     st.caption(
@@ -144,21 +176,79 @@ def manage_page(t):
         st.rerun()
 
     players = get_all_players(t["id"])
+    groups = find_duplicate_groups(players)
+    roles = ROLES_BY_SPORT[t["sport"]]
+
+    # Build the per-player flag text, like "same phone as #7"
+    flags = {}
+    for g in groups:
+        for p in g["players"]:
+            others = ", ".join(f"#{m['number']}" for m in g["players"] if m is not p)
+            flags.setdefault(p["number"], []).append(f"same {g['kind']} as {others}")
+
     st.subheader(f"{len(players)} players registered")
-    if players:
+    if groups:
+        st.warning(f"⚠️ {len(groups)} possible duplicate group(s) need a look.")
+
+    c_a, c_b = st.columns(2)
+    only_dups = c_a.checkbox("Show duplicates only", key=f"dups_{t['code']}")
+    if c_b.button("Show reviewed flags again", key=f"reset_{t['code']}"):
+        reset_flags(t["id"])
+        st.rerun()
+
+    if only_dups:
+        if not groups:
+            st.success("No possible duplicates.")
+        for gi, g in enumerate(groups):
+            with st.container(border=True):
+                st.markdown(f"**{g['reason']}**")
+                for m in g["players"]:
+                    c_info, c_edit, c_rm = st.columns([6, 1.3, 1.5])
+                    c_info.write(f"#{m['number']} · {m['name']} · {m['village']} · {m['phone']}")
+                    player_actions(m, roles, f"g{gi}", c_edit, c_rm)
+                if st.button("Reviewed, not a duplicate",
+                             key=f"dismiss_{t['id']}_{g['reason']}"):
+                    dismiss_flags([m["id"] for m in g["players"]])
+                    st.rerun()
+    elif players:
         st.dataframe(
             [
                 {"No.": p["number"], "Name": p["name"], "Role": p["role"],
-                 "Age": p["age"], "Village": p["village"], "Phone": p["phone"]}
+                 "Age": p["age"], "Village": p["village"], "Phone": p["phone"],
+                 "Flag": "; ".join(flags.get(p["number"], []))}
                 for p in players
             ],
             hide_index=True,
         )
 
-    pdf_key = f"pdf_{t['code']}"
+        st.markdown("**Edit or remove a player**")
+        options = {p["number"]: f"#{p['number']} · {p['name']} · {p['village']}" for p in players}
+        pick_key = f"pick_{t['code']}"
+        if st.session_state.get(pick_key) not in options:
+            st.session_state.pop(pick_key, None)   # the chosen player was removed
+        pick = st.selectbox("Choose a player", list(options),
+                            format_func=options.get, key=pick_key)
+        chosen = next(p for p in players if p["number"] == pick)
+        c_edit, c_rm, _ = st.columns([1, 1, 5])
+        player_actions(chosen, roles, "panel", c_edit, c_rm)
+
+    removed = get_removed_players(t["id"])
+    if removed:
+        with st.expander(f"Removed players ({len(removed)})"):
+            for r in removed:
+                c1, c2 = st.columns([6, 1.5])
+                c1.write(f"#{r['number']} · {r['name']} · {r['village']} · {r['phone']}")
+                if c2.button("Restore", key=f"restore_{r['id']}"):
+                    restore_player(r["id"])
+                    st.rerun()
+
+    st.markdown("---")
+    show_phone = st.checkbox("Include phone numbers in the PDF", value=True,
+                             key=f"phonepdf_{t['code']}")
+    pdf_key = f"pdf_{t['code']}_{int(show_phone)}"
     if st.button("Prepare PDF", type="primary"):
         with st.spinner("Building PDF..."):
-            st.session_state[pdf_key] = build_pdf(players, t["name"])
+            st.session_state[pdf_key] = build_pdf(players, t["name"], show_phone=show_phone)
     if st.session_state.get(pdf_key):
         st.download_button(
             "⬇️ Download PDF",
@@ -166,9 +256,8 @@ def manage_page(t):
             file_name=f"{t['code']}_player_book.pdf",
             mime="application/pdf",
         )
-        st.caption("New registrations since you prepared this? Click Prepare PDF again.")
-
-
+        st.caption("Registered, edited or removed anyone since? Click Prepare PDF again.")
+        
 # ================= ORGANIZER: AUCTION (projector) =================
 def auction_page(t):
     drawn_key, current_key = f"drawn_{t['code']}", f"current_{t['code']}"

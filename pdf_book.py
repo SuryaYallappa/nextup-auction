@@ -12,7 +12,7 @@ def safe(text):
     return str(text).encode("latin-1", "replace").decode("latin-1")
 
 
-def build_pdf(players, title="Player Book"):
+def build_pdf(players, title="Player Book", show_phone=True):
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=False)
     per_page = COLS * ROWS
@@ -39,19 +39,25 @@ def build_pdf(players, title="Player Book"):
         pdf.set_font("Helvetica", "B", 16)
         pdf.set_xy(x + 3, y + 51)
         pdf.cell(34, 8, f"#{p['number']}", align="C")
+
         # details on the right
         tx, tw = x + 40, CARD_W - 43
         pdf.set_font("Helvetica", "B", 13)
         pdf.set_xy(tx, y + 5)
         pdf.multi_cell(tw, 6, safe(p["name"]))
 
-        pdf.set_font("Helvetica", "", 11)
-        pdf.set_xy(tx, y + 24)
-        pdf.cell(tw, 7, safe(f"Role: {p['role']}"))
-        pdf.set_xy(tx, y + 32)
-        pdf.cell(tw, 7, f"Age: {p['age']}")
-        pdf.set_xy(tx, y + 40)
-        pdf.multi_cell(tw, 7, safe(f"Village: {p['village']}"))
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_xy(tx, y + 22)
+        pdf.cell(tw, 6, safe(f"Role: {p['role']}"))
+        pdf.set_xy(tx, y + 28)
+        pdf.cell(tw, 6, f"Age: {p['age']}")
+        pdf.set_xy(tx, y + 34)
+        pdf.multi_cell(tw, 5.5, safe(f"Village: {p['village']}"))
+
+        if show_phone:
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.set_xy(tx, y + 50)
+            pdf.cell(tw, 7, safe(f"Ph: {p['phone']}"))
 
     if not players:
         pdf.add_page()

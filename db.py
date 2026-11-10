@@ -29,7 +29,7 @@ def db():
 def init_db():
     with db() as conn:
         conn.execute("""
-                CREATE TABLE IF NOT EXISTS tournaments (
+            CREATE TABLE IF NOT EXISTS tournaments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 code TEXT UNIQUE NOT NULL,
                 name TEXT NOT NULL,
@@ -57,6 +57,11 @@ def init_db():
                 UNIQUE (tournament_id, number)
             )
         """)
+
+        # Small migration: add the 'removed' column to databases created earlier
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(players)")]
+        if "removed" not in cols:
+            conn.execute("ALTER TABLE players ADD COLUMN removed INTEGER NOT NULL DEFAULT 0")
 
 # ---------------- tournaments ----------------
 def create_tournament(name, sport, event_date, min_age, max_age, deadline, is_public):
@@ -129,11 +134,10 @@ def add_player(tournament_id, name, role, age, village, phone, photo_bytes):
         )
         return number
 
-
 def get_player(tournament_id, number):
     with db() as conn:
         row = conn.execute(
-            "SELECT * FROM players WHERE tournament_id = ? AND number = ?",
+            "SELECT * FROM players WHERE tournament_id = ? AND number = ? AND removed = 0",
             (tournament_id, number),
         ).fetchone()
         return dict(row) if row else None
@@ -142,7 +146,16 @@ def get_player(tournament_id, number):
 def get_all_players(tournament_id):
     with db() as conn:
         rows = conn.execute(
-            "SELECT * FROM players WHERE tournament_id = ? ORDER BY number",
+            "SELECT * FROM players WHERE tournament_id = ? AND removed = 0 ORDER BY number",
+            (tournament_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_removed_players(tournament_id):
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM players WHERE tournament_id = ? AND removed = 1 ORDER BY number",
             (tournament_id,),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -151,7 +164,8 @@ def get_all_players(tournament_id):
 def count_players(tournament_id):
     with db() as conn:
         return conn.execute(
-            "SELECT COUNT(*) FROM players WHERE tournament_id = ?", (tournament_id,)
+            "SELECT COUNT(*) FROM players WHERE tournament_id = ? AND removed = 0",
+            (tournament_id,),
         ).fetchone()[0]
 
 def list_public_tournaments():
@@ -160,3 +174,36 @@ def list_public_tournaments():
             "SELECT * FROM tournaments WHERE is_public = 1 ORDER BY event_date"
         ).fetchall()
         return [dict(r) for r in rows]
+    
+def dismiss_flags(player_ids):
+    """Mark players as 'reviewed, not a duplicate'. Nothing is deleted."""
+    with db() as conn:
+        conn.executemany(
+            "UPDATE players SET flag_dismissed = 1 WHERE id = ?",
+            [(i,) for i in player_ids],
+        )
+def update_player(player_id, name, role, age, village, phone):
+    with db() as conn:
+        conn.execute(
+            "UPDATE players SET name = ?, role = ?, age = ?, village = ?, phone = ? WHERE id = ?",
+            (name, role, age, village, phone, player_id),
+        )
+
+
+def remove_player(player_id):
+    """Soft remove: hidden everywhere, but the row, photo and number are kept."""
+    with db() as conn:
+        conn.execute("UPDATE players SET removed = 1 WHERE id = ?", (player_id,))
+
+
+def restore_player(player_id):
+    with db() as conn:
+        conn.execute("UPDATE players SET removed = 0 WHERE id = ?", (player_id,))
+
+
+def reset_flags(tournament_id):
+    """Undo every 'Reviewed, not a duplicate' click in this tournament."""
+    with db() as conn:
+        conn.execute(
+            "UPDATE players SET flag_dismissed = 0 WHERE tournament_id = ?", (tournament_id,)
+        )
