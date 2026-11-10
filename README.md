@@ -16,11 +16,11 @@ Bidding and money stay in the room. The app only handles the player side.
 
 | Phone registration | Public tournament board |
 |---|---|
-| ![Registration form](screenshots\register.png) | ![Public board](screenshots\Public.png) |
+| ![Registration form](screenshots/register.png) | ![Public board](screenshots/Public.png) |
 
 | Organizer view with duplicate flags | Projector card |
 |---|---|
-| ![Organizer](screenshots\oraganizer.png) | ![Projector](screenshots\auction.png) |
+| ![Organizer](screenshots/oraganizer.png) | ![Projector](screenshots/auction.png) |
 
 ## Features
 
