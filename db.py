@@ -207,3 +207,21 @@ def reset_flags(tournament_id):
         conn.execute(
             "UPDATE players SET flag_dismissed = 0 WHERE tournament_id = ?", (tournament_id,)
         )
+
+def update_tournament(tournament_id, name, event_date, min_age, max_age, deadline, is_public):
+    """Change a tournament's settings. The sport stays fixed, because roles depend on it."""
+    with db() as conn:
+        conn.execute(
+            """UPDATE tournaments
+               SET name = ?, event_date = ?, min_age = ?, max_age = ?,
+                   registration_deadline = ?, is_public = ?
+               WHERE id = ?""",
+            (name, event_date, min_age, max_age, deadline, 1 if is_public else 0, tournament_id),
+        )
+
+
+def update_player_photo(player, photo_bytes):
+    """Replace a player's photo. The file name is tournament_number.jpg, so it is overwritten."""
+    path = save_photo(photo_bytes, player["tournament_id"], player["number"])
+    with db() as conn:
+        conn.execute("UPDATE players SET photo_path = ? WHERE id = ?", (path, player["id"]))

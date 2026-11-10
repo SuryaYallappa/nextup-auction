@@ -1,11 +1,13 @@
 import os
 import streamlit as st
+from datetime import date
 from validators import clean_phone, check_age, check_registration_open, today_in_india
 from db import (
     init_db, create_tournament, get_tournament_by_code, list_tournaments,
     list_public_tournaments, set_registration_open, add_player, get_player,
     get_all_players, count_players, dismiss_flags, update_player, remove_player,
     restore_player, reset_flags, get_removed_players,
+    update_tournament, update_player_photo,
 )
 from duplicates import find_duplicate_groups
 from pdf_book import build_pdf
@@ -128,6 +130,8 @@ def create_form(has_tournaments):
 def player_actions(p, roles, ctx, col_edit, col_remove):
     """Edit and Remove buttons for one player. Remove is soft, so it can be undone."""
     with col_edit.popover("✏️ Edit"):
+        if p["photo_path"] and os.path.exists(p["photo_path"]):
+            st.image(p["photo_path"], width=120)
         with st.form(f"edit_{ctx}_{p['id']}"):
             name = st.text_input("Name", value=p["name"])
             role = st.selectbox(
@@ -137,6 +141,7 @@ def player_actions(p, roles, ctx, col_edit, col_remove):
             age = st.number_input("Age", min_value=5, max_value=100, value=int(p["age"]))
             village = st.text_input("Village", value=p["village"])
             phone_raw = st.text_input("Phone", value=p["phone"])
+            new_photo = st.file_uploader("New photo (optional)", type=["jpg", "jpeg", "png"])
             save = st.form_submit_button("Save changes", type="primary")
         if save:
             phone = clean_phone(phone_raw)
@@ -145,14 +150,59 @@ def player_actions(p, roles, ctx, col_edit, col_remove):
             elif phone is None:
                 st.error("Enter a valid 10-digit mobile number.")
             else:
-                update_player(p["id"], name.strip(), role, int(age), village.strip(), phone)
-                st.rerun()
+                try:
+                    update_player(p["id"], name.strip(), role, int(age), village.strip(), phone)
+                    if new_photo is not None:
+                        update_player_photo(p, new_photo.getvalue())
+                except Exception as e:
+                    st.error(f"Could not save. Try a different photo. ({e})")
+                else:
+                    st.rerun()
 
     with col_remove.popover("🗑 Remove"):
         st.write(f"Remove #{p['number']} {p['name']}? You can restore them later.")
         if st.button("Yes, remove", key=f"rm_{ctx}_{p['id']}", type="primary"):
             remove_player(p["id"])
             st.rerun()
+
+def settings_editor(t):
+    with st.expander("⚙️ Tournament settings"):
+        k = t["code"]
+        today = today_in_india()
+        with st.form(f"settings_{k}"):
+            name = st.text_input("Tournament name", value=t["name"], key=f"s_name_{k}")
+            event_date = st.date_input(
+                "Event date",
+                value=date.fromisoformat(t["event_date"]) if t["event_date"] else today,
+                key=f"s_event_{k}",
+            )
+            col1, col2 = st.columns(2)
+            min_age = col1.number_input("Minimum age", min_value=5, max_value=80,
+                                        value=int(t["min_age"]), key=f"s_min_{k}")
+            max_age = col2.number_input("Maximum age", min_value=5, max_value=80,
+                                        value=int(t["max_age"]), key=f"s_max_{k}")
+            deadline = st.date_input(
+                "Registration deadline",
+                value=date.fromisoformat(t["registration_deadline"])
+                if t["registration_deadline"] else today,
+                key=f"s_deadline_{k}",
+            )
+            is_public = st.checkbox("Show on the public tournament board",
+                                    value=bool(t["is_public"]), key=f"s_public_{k}")
+            save = st.form_submit_button("Save settings", type="primary")
+        st.caption(f"Sport ({t['sport']}) cannot be changed. New age limits apply to new "
+                   "registrations only. Players already registered stay.")
+        if save:
+            if not name.strip():
+                st.error("Enter a tournament name.")
+            elif min_age > max_age:
+                st.error("Minimum age cannot be higher than maximum age.")
+            elif deadline > event_date:
+                st.error("The deadline must be on or before the event date.")
+            else:
+                update_tournament(t["id"], name.strip(), event_date.isoformat(),
+                                  int(min_age), int(max_age), deadline.isoformat(), is_public)
+                st.rerun()
 
 
 def manage_page(t):
@@ -174,6 +224,8 @@ def manage_page(t):
     if is_open != bool(t["registration_open"]):
         set_registration_open(t["id"], is_open)
         st.rerun()
+
+    settings_editor(t)
 
     players = get_all_players(t["id"])
     groups = find_duplicate_groups(players)
